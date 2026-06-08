@@ -1,0 +1,112 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+#define RXD2 16
+#define TXD2 17
+
+const char* ssid = "PS";
+const char* password = "12345678";
+
+// Hàm bóc tách chuỗi bằng dấu phân cách (dấu phẩy)
+String getValue(String data, char separator, int index) {
+  int found = 0;
+  int strIndex[] = {0, -1};
+  int maxIndex = data.length() - 1;
+
+  for (int i = 0; i <= maxIndex && found <= index; i++) {
+    if (data.charAt(i) == separator || i == maxIndex) {
+        found++;
+        strIndex[0] = strIndex[1] + 1;
+        strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
+  
+  Serial.print("Đang kết nối WiFi: ");
+  Serial.println(ssid);
+  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("\nĐã kết nối WiFi thành công!");
+  Serial.print("Địa chỉ IP của ESP32: ");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+  if (WiFi.status() == WL_CONNECTED && Serial2.available()) {
+    String data = Serial2.readStringUntil('\n');
+    data.trim(); // Xóa ký tự thừa (\r, khoảng trắng)
+    
+    if (data.length() > 0) {
+      String payload = ""; 
+
+      // =======================================================
+      // 1. DỮ LIỆU KẾT QUẢ AI (Mô hình Hồi quy: Dạng AI,120.5)
+      // =======================================================
+      if (data.startsWith("AI,")) {
+        String val_AI_Prediction = getValue(data, ',', 1); // Lấy con số sau chữ AI,
+
+        Serial.println("\n[AI] Giá trị dự đoán (Regression): " + val_AI_Prediction);
+        
+        // Đóng gói JSON (Dùng key "AI_Prediction")
+        payload = "{\"AI_Prediction\":" + val_AI_Prediction + "}";
+      } 
+      
+      // =======================================================
+      // 2. DỮ LIỆU CẢM BIẾN (Chuỗi 7 thông số)
+      // =======================================================
+      else {
+        String val_Rel_IAQ  = getValue(data, ',', 0);
+        String val_IAQ      = getValue(data, ',', 1);
+        String val_TVOC     = getValue(data, ',', 2);
+        String val_eCO2     = getValue(data, ',', 3);
+        String val_EtOH     = getValue(data, ',', 4);
+        String val_Temp     = getValue(data, ',', 5);
+        String val_Humidity = getValue(data, ',', 6);
+
+        // Lọc nhiễu: Chỉ tạo JSON khi bóc tách đủ dữ liệu
+        if (val_Rel_IAQ != "" && val_Humidity != "") {
+          payload = "{\"Rel_IAQ\":" + val_Rel_IAQ + 
+                     ",\"IAQ\":" + val_IAQ + 
+                     ",\"TVOC\":" + val_TVOC + 
+                     ",\"eCO2\":" + val_eCO2 + 
+                     ",\"EtOH\":" + val_EtOH + 
+                     ",\"Temp\":" + val_Temp + 
+                     ",\"Humidity\":" + val_Humidity + "}";
+        } else {
+Serial.println("[LỖI UART] Chuỗi không hợp lệ: " + data);
+        }
+      }
+
+      // =======================================================
+      // 3. GỬI HTTP POST
+      // =======================================================
+      if (payload != "") {
+        Serial.println("Đang gửi JSON: " + payload);
+
+        HTTPClient http;
+        // ĐẢM BẢO URL NGROK ĐÚNG VỚI PHIÊN ĐANG CHẠY CỦA BẠN
+        http.begin("https://unresigned-monopodially-fermina.ngrok-free.dev/update");
+        http.addHeader("Content-Type", "application/json"); 
+        
+        int httpResponseCode = http.POST(payload);
+        
+        if (httpResponseCode > 0) {
+          Serial.println("Server nhận OK. Trả về mã: " + String(httpResponseCode));
+        } else {
+          Serial.println("Lỗi gửi HTTP: " + String(httpResponseCode));
+        }
+        http.end();
+      }
+    }
+  }
+}
